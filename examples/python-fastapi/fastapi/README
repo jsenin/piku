@@ -1,0 +1,8 @@
+In progress....
+
+Needs to set hostname using 
+
+`piku config:set NGINX_SERVER_NAME=hostname`
+
+then browse to the url and see  'hello world'
+also can checkout api doc at http://BIND_ADDRESS:PORT/docs
