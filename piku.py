@@ -619,12 +619,14 @@ def deploy_identity(app, deltas={}):
     if not exists(env_path):
         makedirs(env_path)
 
-def spawn_static(app_path, workers, env):
+def get_static_mappings(app_path, workers, env):
+    print ("Get static mappings")
     # Get a mapping of /url:path1,/url2:path2
     static_paths = env.get('NGINX_STATIC_PATHS', '')
     # prepend static worker path if present
     stripped = workers['static'].strip("/").rstrip("/")
     static_paths = "/:" + (stripped if stripped else ".") + "/" + ("," if static_paths else "") + static_paths
+    mappings = ""
 
     try:
         items = static_paths.split(',')
@@ -632,14 +634,32 @@ def spawn_static(app_path, workers, env):
             static_url, static_path = item.split(':')
             if static_path[0] != '/':
                 static_path = join(app_path, static_path)
-            env['INTERNAL_NGINX_STATIC_MAPPINGS'] = env['INTERNAL_NGINX_STATIC_MAPPINGS'] + expandvars(
-                INTERNAL_NGINX_STATIC_MAPPING, locals())
+
+            ngnix_mapper = expandvars(INTERNAL_NGINX_STATIC_MAPPING, {'static_url': static_url, 'static_path': static_path})
+            mappings = mappings + ngnix_mapper
+        return mappings
+
     except Exception as e:
         echo("Error {} in static path spec: should be /url1:path1[,/url2:path2], ignoring.".format(e))
-        env['INTERNAL_NGINX_STATIC_MAPPINGS'] = ''
+        return mappings
+
 
 def spawn_app(app, deltas={}, deployer=None):
     """Create all workers for an app"""
+
+    def apply_ngnix_config(nginx_conf, settings, app, environ):
+        ## ---- write config and test
+        with open(nginx_conf, "w") as h:
+            h.write(buffer)
+        # prevent broken config from breaking other deploys
+        try:
+            nginx_config_test = str(check_output("nginx -t 2>&1 | grep {}".format(app), env=environ, shell=True))
+        except Exception:
+            nginx_config_test = None
+        if nginx_config_test:
+            echo("Error: [nginx config] {}".format(nginx_config_test), fg='red')
+            echo("Warning: removing broken nginx config.", fg='yellow')
+            unlink(nginx_conf)
 
     # pylint: disable=unused-variable
     app_path = join(APP_ROOT, app)
@@ -786,10 +806,8 @@ def spawn_app(app, deltas={}, deployer=None):
             env['INTERNAL_NGINX_BLOCK_GIT'] = "" if env.get('NGINX_ALLOW_GIT_FOLDERS') else "location ~ /\.git { deny all; }"
 
             env['INTERNAL_NGINX_STATIC_MAPPINGS'] = ''
-
-            # ----------------- static -----------------------
             if 'static' in workers:
-                spawn_static(app_path, workers, env)
+                env['INTERNAL_NGINX_STATIC_MAPPINGS'] = get_static_mappings(app_path, workers, env)
 
             env['INTERNAL_NGINX_CUSTOM_CLAUSES'] = expandvars(open(join(app_path, env["NGINX_INCLUDE_FILE"])).read(),
                                                               env) if env.get("NGINX_INCLUDE_FILE") else ""
@@ -804,18 +822,28 @@ def spawn_app(app, deltas={}, deployer=None):
                 echo("-----> nginx will redirect all requests to hostname '{}' to HTTPS".format(env['NGINX_SERVER_NAME']))
             else:
                 buffer = expandvars(NGINX_TEMPLATE, env)
-            with open(nginx_conf, "w") as h:
-                h.write(buffer)
-            # prevent broken config from breaking other deploys
-            try:
-                nginx_config_test = str(check_output("nginx -t 2>&1 | grep {}".format(app), env=environ, shell=True))
-            except Exception:
-                nginx_config_test = None
-            if nginx_config_test:
-                echo("Error: [nginx config] {}".format(nginx_config_test), fg='red')
-                echo("Warning: removing broken nginx config.", fg='yellow')
-                unlink(nginx_conf)
 
+            apply_ngnix_config(nginx_conf, buffer, app, environ)
+
+
+    if not 'NGINX_SERVER_NAME' in env:
+        if 'static' in workers:
+            env['NGINX_SERVER_NAME'] = 'fooo'
+            env['NGINX_SOCKET'] = "{BIND_ADDRESS:s}:{PORT:s}".format(**env)
+            env['NGINX_SSL'] = '443 ssl'
+            env['INTERNAL_NGINX_CUSTOM_CLAUSES'] = ''
+            env['INTERNAL_NGINX_BLOCK_GIT'] = ''
+            env['INTERNAL_NGINX_PORTMAP'] = ''
+            echo("-----> nginx will map app '{}' to hostname '{}'".format(app, env['NGINX_SERVER_NAME']))
+            env['INTERNAL_NGINX_STATIC_MAPPINGS'] = get_static_mappings(app_path, workers, env)
+            # el common incluye los mappings
+            env['INTERNAL_NGINX_COMMON'] = expandvars(NGINX_COMMON_FRAGMENT, env)
+            buffer = expandvars(NGINX_TEMPLATE, env)
+
+            nginx_conf = join(NGINX_ROOT, "{}.conf".format(app))
+            apply_ngnix_config(nginx_conf, buffer, app, environ)
+
+    ### ------------------- scaling
     # Configured worker count
     if exists(scaling):
         worker_count.update({k: int(v) for k, v in parse_procfile(scaling).items() if k in workers})
@@ -830,10 +858,21 @@ def spawn_app(app, deltas={}, deployer=None):
                 to_destroy[k] = range(worker_count[k], worker_count[k] + deltas[k], -1)
             worker_count[k] = worker_count[k] + deltas[k]
 
+    ### ------------------- scaling
+
+
     # Cleanup env
     for k, v in list(env.items()):
         if k.startswith('INTERNAL_'):
             del env[k]
+
+
+
+
+    #### ----- apply configurations
+
+
+
 
     # Save current settings
     write_config(live, env)
@@ -971,8 +1010,6 @@ def spawn_worker(app, kind, command, env, ordinal=1):
 
     for k, v in env.items():
         settings.append(('env', '{k:s}={v}'.format(**locals())))
-
-    print (settings)
 
     if kind != 'static':
         with open(available, 'w') as h:
