@@ -52,6 +52,16 @@ UWSGI_LOG_MAXSIZE = '1048576'
 ACME_ROOT = environ.get('ACME_ROOT', join(environ['HOME'], '.acme.sh'))
 ACME_WWW = abspath(join(PIKU_ROOT, "acme"))
 
+DEPLOYER_NONE = 'deployer_none'
+DEPLOYER_STATIC = 'deployer_static'
+DEPLOYER_GENERIC = 'deployer_generic'
+DEPLOYER_CLOJURE = 'deployer_clojure'
+DEPLOYER_GO = 'deployer_go'
+DEPLOYER_JAVA_GRADLE = 'deployer_java_gradle'
+DEPLOYER_JAVA_MAVEN = 'deployer_java_maven'
+DEPLOYER_PYTHON = 'deployer_python'
+DEPLOYER_NODE = 'deployer_node'
+
 # === Make sure we can access piku user-installed binaries === #
 
 if PIKU_BIN not in environ['PATH']:
@@ -347,9 +357,9 @@ def do_deploy(app, deltas={}, newrev=None):
         echo("Error: Invalid Procfile for app '{}'.".format(app), fg='red')
         return
 
-    deploy_factory(app, app_path, workers, deltas)
+    deployer = deploy_factory(app, app_path, workers, deltas)
     settings = {}
-    spawn = spawn_app(app, deltas)
+    spawn = spawn_app(app, deltas, deployer)
     settings.update(spawn)
 
 
@@ -363,44 +373,45 @@ def deploy_factory(app, app_path, workers, deltas):
     if exists(join(app_path, 'requirements.txt')):
         found_app("Python")
         deploy_python(app, deltas)
-        return
+        return DEPLOYER_PYTHON
 
     if exists(join(app_path, 'package.json')) and check_requirements(['nodejs', 'npm', 'nodeenv']):
         found_app("Node")
         deploy_node(app, deltas)
-        return
+        return DEPLOYER_NODE
 
     if exists(join(app_path, 'pom.xml'))  and check_requirements(['java', 'mvn']):
         found_app("Java Maven")
         deploy_java(app, deltas)
-        return
+        return DEPLOYER_JAVA_MAVEN
 
     if exists(join(app_path, 'build.gradle')) and check_requirements(['java', 'gradle']):
         found_app("Java Gradle")
         deploy_gradle(app, deltas)
-        return
+        return DEPLOYER_JAVA_GRADLE
 
     if (exists(join(app_path, 'Godeps')) or len(glob(join(app_path, '*.go')))) and check_requirements(['go']):
         found_app("Go")
         deploy_go(app, deltas)
-        return
+        return DEPLOYER_GO
 
     if exists(join(app_path, 'project.clj')) and check_requirements(['java', 'lein']):
         found_app("Clojure Lein")
         deploy_clojure(app, deltas)
-        return
+        return DEPLOYER_CLOJURE
 
     if 'release' in workers and 'web' in workers:
         echo("-----> Generic app detected.", fg='green')
         deploy_identity(app, deltas)
-        return
+        return DEPLOYER_GENERIC
 
     if 'static' in workers:
         echo("-----> Static app detected.", fg='green')
         deploy_identity(app, deltas)
-        return
+        return DEPLOYER_STATIC
 
     echo("-----> Could not detect runtime!", fg='red')
+    return DEPLOYER_NONE
 
 
 def do_release(release, app_path, settings):
@@ -627,7 +638,7 @@ def spawn_static(app_path, workers, env):
         echo("Error {} in static path spec: should be /url1:path1[,/url2:path2], ignoring.".format(e))
         env['INTERNAL_NGINX_STATIC_MAPPINGS'] = ''
 
-def spawn_app(app, deltas={}):
+def spawn_app(app, deltas={}, deployer=None):
     """Create all workers for an app"""
 
     # pylint: disable=unused-variable
@@ -668,7 +679,7 @@ def spawn_app(app, deltas={}):
 
     # add node path if present
     node_path = join(virtualenv_path, "node_modules")
-    if exists(node_path):
+    if deployer == DEPLOYER_NODE and exists(node_path):
         env["NODE_PATH"] = node_path
         env["PATH"] = ':'.join([join(node_path, ".bin"), env['PATH']])
 
@@ -681,6 +692,7 @@ def spawn_app(app, deltas={}):
         env.update(parse_settings(settings, env))  # lgtm [py/modification-of-default-value]
 
     if 'web' in workers or 'wsgi' in workers or 'jwsgi' in workers or 'static' in workers:
+    # if deployer in [DEPLOYER_GENERIC, DEPLOYER_PYTHON, DEPLOYER_STATIC]:
         # Pick a port if none defined
         if 'PORT' not in env:
             env['PORT'] = str(get_free_port())
@@ -959,6 +971,8 @@ def spawn_worker(app, kind, command, env, ordinal=1):
 
     for k, v in env.items():
         settings.append(('env', '{k:s}={v}'.format(**locals())))
+
+    print (settings)
 
     if kind != 'static':
         with open(available, 'w') as h:
