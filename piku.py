@@ -378,7 +378,7 @@ def deploy_factory(workers, app_path, deltas):
 
     if exists(join(app_path, 'build.gradle')) and check_requirements(['java', 'gradle']):
         found_app("Java Gradle")
-        deploy_java(app, deltas)
+        deploy_gradle(app, deltas)
 
     if (exists(join(app_path, 'Godeps')) or len(glob(join(app_path, '*.go')))) and check_requirements(['go']):
         found_app("Go")
@@ -431,8 +431,6 @@ def deploy_gradle(app, deltas={}):
         echo("-----> Removing previous builds")
         echo("-----> Rebuilding Java Application")
         call('gradle clean build', cwd=join(APP_ROOT, app), env=env, shell=True)
-
-    return spawn_app(app, deltas)
 
 
 def deploy_java(app, deltas={}):
