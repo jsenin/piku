@@ -363,34 +363,42 @@ def deploy_factory(app, app_path, workers, deltas):
     if exists(join(app_path, 'requirements.txt')):
         found_app("Python")
         deploy_python(app, deltas)
+        return
 
     if exists(join(app_path, 'package.json')) and check_requirements(['nodejs', 'npm', 'nodeenv']):
         found_app("Node")
         deploy_node(app, deltas)
+        return
 
     if exists(join(app_path, 'pom.xml'))  and check_requirements(['java', 'mvn']):
         found_app("Java Maven")
         deploy_java(app, deltas)
+        return
 
     if exists(join(app_path, 'build.gradle')) and check_requirements(['java', 'gradle']):
         found_app("Java Gradle")
         deploy_gradle(app, deltas)
+        return
 
     if (exists(join(app_path, 'Godeps')) or len(glob(join(app_path, '*.go')))) and check_requirements(['go']):
         found_app("Go")
         deploy_go(app, deltas)
+        return
 
     if exists(join(app_path, 'project.clj')) and check_requirements(['java', 'lein']):
         found_app("Clojure Lein")
         deploy_clojure(app, deltas)
+        return
 
     if 'release' in workers and 'web' in workers:
         echo("-----> Generic app detected.", fg='green')
         deploy_identity(app, deltas)
+        return
 
     if 'static' in workers:
         echo("-----> Static app detected.", fg='green')
         deploy_identity(app, deltas)
+        return
 
     echo("-----> Could not detect runtime!", fg='red')
 
@@ -560,14 +568,20 @@ def deploy_node(app, deltas={}):
 
 
 def deploy_python(app, deltas={}):
-    """Deploy a Python application"""
+    """Deploy a Python application, create and enable virutal environment, and install requeriments.txt"""
 
-    def should_install_requirements(first_time, requirements, virtualenv_path):
-        return first_time or getmtime(requirements) > getmtime(virtualenv_path)
+    def is_fresh_requirements(requirements, virtualenv_path):
+        return getmtime(requirements) > getmtime(virtualenv_path)
+
+    def install_requirements(first_time, requirements, virtualenv_path):
+        if first_time or is_fresh_requirements(requirements, virtualenv_path):
+            echo("-----> Running pip for '{}'".format(app), fg='green')
+            call('pip install -r {}'.format(requirements), cwd=virtualenv_path, shell=True)
 
     virtualenv_path = join(ENV_ROOT, app)
     requirements = join(APP_ROOT, app, 'requirements.txt')
     env_file = join(APP_ROOT, app, 'ENV')
+
     # Peek at environment variables shipped with repo (if any) to determine version
     env = {}
     if exists(env_file):
@@ -587,10 +601,7 @@ def deploy_python(app, deltas={}):
     activation_script = join(virtualenv_path, 'bin', 'activate_this.py')
     exec(open(activation_script).read(), dict(__file__=activation_script))
 
-    if should_install_requirements(first_time, requirements, virtualenv_path):
-        echo("-----> Running pip for '{}'".format(app), fg='green')
-        call('pip install -r {}'.format(requirements), cwd=virtualenv_path, shell=True)
-
+    install_requirements(first_time, requirements, virtualenv_path)
 
 def deploy_identity(app, deltas={}):
     env_path = join(ENV_ROOT, app)
