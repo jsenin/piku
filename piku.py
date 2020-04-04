@@ -351,7 +351,7 @@ def do_deploy(app, deltas={}, newrev=None):
         echo("Error: Invalid Procfile for app '{}'.".format(app), fg='red')
         return
 
-    deploy_factory(workers, app_path, deltas)
+    deploy_factory(app, app_path, workers, deltas)
     settings = {}
     spawn = spawn_app(app, deltas)
     settings.update(spawn)
@@ -363,12 +363,12 @@ def do_deploy(app, deltas={}, newrev=None):
         do_release(release, app_path, settings)
 
 
-def deploy_factory(workers, app_path, deltas):
+def deploy_factory(app, app_path, workers, deltas):
     if exists(join(app_path, 'requirements.txt')):
-        found_app("Python"):
+        found_app("Python")
         deploy_python(app, deltas)
 
-    if exists(join(app_path, 'package.json')) and check_requirements(['nodejs', 'npm']) or check_requirements(['nodeenv'])):
+    if exists(join(app_path, 'package.json')) and check_requirements(['nodejs', 'npm']) or check_requirements(['nodeenv']):
         found_app("Node")
         deploy_node(app, deltas)
 
@@ -566,8 +566,8 @@ def deploy_node(app, deltas={}):
 def deploy_python(app, deltas={}):
     """Deploy a Python application"""
 
-    def should_install_requirements(first_time, requirements, virtualenv_path)
-        return first_time or getmtime(requirements) > getmtime(virtualenv_path):
+    def should_install_requirements(first_time, requirements, virtualenv_path):
+        return first_time or getmtime(requirements) > getmtime(virtualenv_path)
 
     virtualenv_path = join(ENV_ROOT, app)
     requirements = join(APP_ROOT, app, 'requirements.txt')
@@ -601,6 +601,24 @@ def deploy_identity(app, deltas={}):
     if not exists(env_path):
         makedirs(env_path)
 
+def spawn_static(app_path, workers, env):
+    # Get a mapping of /url:path1,/url2:path2
+    static_paths = env.get('NGINX_STATIC_PATHS', '')
+    # prepend static worker path if present
+    stripped = workers['static'].strip("/").rstrip("/")
+    static_paths = "/:" + (stripped if stripped else ".") + "/" + ("," if static_paths else "") + static_paths
+
+    try:
+        items = static_paths.split(',')
+        for item in items:
+            static_url, static_path = item.split(':')
+            if static_path[0] != '/':
+                static_path = join(app_path, static_path)
+            env['INTERNAL_NGINX_STATIC_MAPPINGS'] = env['INTERNAL_NGINX_STATIC_MAPPINGS'] + expandvars(
+                INTERNAL_NGINX_STATIC_MAPPING, locals())
+    except Exception as e:
+        echo("Error {} in static path spec: should be /url1:path1[,/url2:path2], ignoring.".format(e))
+        env['INTERNAL_NGINX_STATIC_MAPPINGS'] = ''
 
 def spawn_app(app, deltas={}):
     """Create all workers for an app"""
@@ -750,24 +768,9 @@ def spawn_app(app, deltas={}):
 
             env['INTERNAL_NGINX_STATIC_MAPPINGS'] = ''
 
-            # Get a mapping of /url:path1,/url2:path2
-            static_paths = env.get('NGINX_STATIC_PATHS', '')
-            # prepend static worker path if present
+            # ----------------- static -----------------------
             if 'static' in workers:
-                stripped = workers['static'].strip("/").rstrip("/")
-                static_paths = "/:" + (stripped if stripped else ".") + "/" + ("," if static_paths else "") + static_paths
-            if len(static_paths):
-                try:
-                    items = static_paths.split(',')
-                    for item in items:
-                        static_url, static_path = item.split(':')
-                        if static_path[0] != '/':
-                            static_path = join(app_path, static_path)
-                        env['INTERNAL_NGINX_STATIC_MAPPINGS'] = env['INTERNAL_NGINX_STATIC_MAPPINGS'] + expandvars(
-                            INTERNAL_NGINX_STATIC_MAPPING, locals())
-                except Exception as e:
-                    echo("Error {} in static path spec: should be /url1:path1[,/url2:path2], ignoring.".format(e))
-                    env['INTERNAL_NGINX_STATIC_MAPPINGS'] = ''
+                spawn_static(app_path, workers, env)
 
             env['INTERNAL_NGINX_CUSTOM_CLAUSES'] = expandvars(open(join(app_path, env["NGINX_INCLUDE_FILE"])).read(),
                                                               env) if env.get("NGINX_INCLUDE_FILE") else ""
