@@ -345,39 +345,59 @@ def do_deploy(app, deltas={}, newrev=None):
     call('git submodule update', cwd=app_path, env=env, shell=True)
     if not exists(log_path):
         makedirs(log_path)
-    workers = parse_procfile(procfile)
 
+    workers = parse_procfile(procfile)
     if not workers:
         echo("Error: Invalid Procfile for app '{}'.".format(app), fg='red')
         return
 
+    deploy_factory(workers, app_path, deltas)
     settings = {}
-    if exists(join(app_path, 'requirements.txt')) and found_app("Python"):
-        settings.update(deploy_python(app, deltas))
-    elif exists(join(app_path, 'package.json')) and found_app("Node") and (
-            check_requirements(['nodejs', 'npm']) or check_requirements(['nodeenv'])):
-        settings.update(deploy_node(app, deltas))
-    elif exists(join(app_path, 'pom.xml')) and found_app("Java Maven") and check_requirements(['java', 'mvn']):
-        settings.update(deploy_java(app, deltas))
-    elif exists(join(app_path, 'build.gradle')) and found_app("Java Gradle") and check_requirements(['java', 'gradle']):
-        settings.update(deploy_java(app, deltas))
-    elif (exists(join(app_path, 'Godeps')) or len(glob(join(app_path, '*.go')))) and found_app("Go") and check_requirements(['go']):
-        settings.update(deploy_go(app, deltas))
-    elif exists(join(app_path, 'project.clj')) and found_app("Clojure Lein") and check_requirements(['java', 'lein']):
-        settings.update(deploy_clojure(app, deltas))
-    elif 'release' in workers and 'web' in workers:
-        echo("-----> Generic app detected.", fg='green')
-        settings.update(deploy_identity(app, deltas))
-    elif 'static' in workers:
-        echo("-----> Static app detected.", fg='green')
-        settings.update(deploy_identity(app, deltas))
-    else:
-        echo("-----> Could not detect runtime!", fg='red')
+    spawn = spawn_app(app, deltas)
+    settings.update(spawn)
+
 
     # TODO: detect other runtimes
     release = workers.pop("release", None)
     if release:
-        do_release(release)
+        do_release(release, app_path, settings)
+
+
+def deploy_factory(workers, app_path, deltas):
+    if exists(join(app_path, 'requirements.txt')):
+        found_app("Python"):
+        deploy_python(app, deltas)
+
+    if exists(join(app_path, 'package.json')) and check_requirements(['nodejs', 'npm']) or check_requirements(['nodeenv'])):
+        found_app("Node")
+        deploy_node(app, deltas)
+
+    if exists(join(app_path, 'pom.xml'))  and check_requirements(['java', 'mvn']):
+        found_app("Java Maven")
+        deploy_java(app, deltas)
+
+    if exists(join(app_path, 'build.gradle')) and check_requirements(['java', 'gradle']):
+        found_app("Java Gradle")
+        deploy_java(app, deltas)
+
+    if (exists(join(app_path, 'Godeps')) or len(glob(join(app_path, '*.go')))) and check_requirements(['go']):
+        found_app("Go")
+        deploy_go(app, deltas)
+
+    if exists(join(app_path, 'project.clj')) and check_requirements(['java', 'lein']):
+        found_app("Clojure Lein")
+        deploy_clojure(app, deltas)
+
+    if 'release' in workers and 'web' in workers:
+        echo("-----> Generic app detected.", fg='green')
+        deploy_identity(app, deltas)
+
+    if 'static' in workers:
+        echo("-----> Static app detected.", fg='green')
+        deploy_identity(app, deltas)
+
+    echo("-----> Could not detect runtime!", fg='red')
+
 
 def do_release(release, app_path, settings):
     echo("-----> Releasing", fg='green')
@@ -443,7 +463,6 @@ def deploy_java(app, deltas={}):
         echo("-----> Rebuilding Java Application")
         call('mvn clean package', cwd=join(APP_ROOT, app), env=env, shell=True)
 
-    return spawn_app(app, deltas)
 
 
 def deploy_clojure(app, deltas={}):
@@ -466,7 +485,6 @@ def deploy_clojure(app, deltas={}):
     call('lein clean', cwd=join(APP_ROOT, app), env=env, shell=True)
     call('lein uberjar', cwd=join(APP_ROOT, app), env=env, shell=True)
 
-    return spawn_app(app, deltas)
 
 
 def deploy_go(app, deltas={}):
@@ -493,7 +511,6 @@ def deploy_go(app, deltas={}):
                 'GO15VENDOREXPERIMENT': '1'
             }
             call('godep update ...', cwd=join(APP_ROOT, app), env=env, shell=True)
-    return spawn_app(app, deltas)
 
 
 def deploy_node(app, deltas={}):
@@ -546,11 +563,13 @@ def deploy_node(app, deltas={}):
             symlink(node_path, node_path_tmp)
             call('npm install', cwd=join(APP_ROOT, app), env=env, shell=True)
             unlink(node_path_tmp)
-    return spawn_app(app, deltas)
 
 
 def deploy_python(app, deltas={}):
     """Deploy a Python application"""
+
+    def should_install_requirements(first_time, requirements, virtualenv_path)
+        return first_time or getmtime(requirements) > getmtime(virtualenv_path):
 
     virtualenv_path = join(ENV_ROOT, app)
     requirements = join(APP_ROOT, app, 'requirements.txt')
@@ -574,17 +593,15 @@ def deploy_python(app, deltas={}):
     activation_script = join(virtualenv_path, 'bin', 'activate_this.py')
     exec(open(activation_script).read(), dict(__file__=activation_script))
 
-    if first_time or getmtime(requirements) > getmtime(virtualenv_path):
+    if should_install_requirements(first_time, requirements, virtualenv_path):
         echo("-----> Running pip for '{}'".format(app), fg='green')
         call('pip install -r {}'.format(requirements), cwd=virtualenv_path, shell=True)
-    return spawn_app(app, deltas)
 
 
 def deploy_identity(app, deltas={}):
     env_path = join(ENV_ROOT, app)
     if not exists(env_path):
         makedirs(env_path)
-    return spawn_app(app, deltas)
 
 
 def spawn_app(app, deltas={}):
