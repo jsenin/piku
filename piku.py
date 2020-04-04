@@ -311,11 +311,7 @@ def check_requirements(binaries):
 
     echo("-----> Checking requirements: {}".format(binaries), fg='green')
     requirements = list(map(which, binaries))
-    echo(str(requirements))
-
-    if None in requirements:
-        return False
-    return True
+    return requirements
 
 
 def found_app(kind):
@@ -368,7 +364,7 @@ def deploy_factory(app, app_path, workers, deltas):
         found_app("Python")
         deploy_python(app, deltas)
 
-    if exists(join(app_path, 'package.json')) and check_requirements(['nodejs', 'npm']) or check_requirements(['nodeenv']):
+    if exists(join(app_path, 'package.json')) and check_requirements(['nodejs', 'npm', 'nodeenv']):
         found_app("Node")
         deploy_node(app, deltas)
 
