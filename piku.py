@@ -387,7 +387,7 @@ def do_deploy(app, deltas={}, newrev=None):
     # TODO: detect other runtimes
     release = workers.pop("release", None)
     if release:
-        do_release(release, app_path, settings)
+        do_release(release, app, settings)
 
 
 def deploy_factory(app, workers, deltas):
@@ -442,7 +442,8 @@ def deploy_factory(app, workers, deltas):
     return DEPLOYER_NONE
 
 
-def do_release(release, app_path, settings):
+def do_release(release, app, settings):
+    app_path = join(APP_ROOT, app)
     echo("-----> Releasing", fg='green')
     retval = call(release, cwd=app_path, env=settings, shell=True)
     if retval:
