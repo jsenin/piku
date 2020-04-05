@@ -330,18 +330,9 @@ def found_app(kind):
     return True
 
 
-def do_deploy(app, deltas={}, newrev=None):
-    """Deploy an app by resetting the work directory"""
-
+def deploy_git_app(app, newrev=None):
     app_path = join(APP_ROOT, app)
-    procfile = join(app_path, 'Procfile')
-    log_path = join(LOG_ROOT, app)
-
     env = {'GIT_WORK_DIR': app_path}
-
-    if not exists(app_path):
-        echo("Error: app '{}' not found.".format(app), fg='red')
-        return
 
     echo("-----> Deploying app '{}'".format(app), fg='green')
     call('git fetch --quiet', cwd=app_path, env=env, shell=True)
@@ -349,19 +340,49 @@ def do_deploy(app, deltas={}, newrev=None):
         call('git reset --hard {}'.format(newrev), cwd=app_path, env=env, shell=True)
     call('git submodule init', cwd=app_path, env=env, shell=True)
     call('git submodule update', cwd=app_path, env=env, shell=True)
-    if not exists(log_path):
-        makedirs(log_path)
 
+
+def assert_app_exists(app):
+    app_path = join(APP_ROOT, app)
+    if not exists(app_path):
+        echo("Error: app '{}' not found.".format(app), fg='red')
+        return
+
+
+def ensure_path(path):
+    if not exists(path):
+        makedirs(path)
+
+
+class AppConfigurationError(Exception):
+    pass
+
+
+def get_workers(app):
+    app_path = join(APP_ROOT, app)
+    procfile = join(app_path, 'Procfile')
     workers = parse_procfile(procfile)
     if not workers:
         echo("Error: Invalid Procfile for app '{}'.".format(app), fg='red')
-        return
+        raise AppConfigurationError('Procfile not valid')
+    return workers
 
-    deployer = deploy_factory(app, app_path, workers, deltas)
-    settings = {}
-    spawn = spawn_app(app, deltas, deployer)
-    settings.update(spawn)
 
+def do_deploy(app, deltas={}, newrev=None):
+    """Deploy an app by resetting the work directory"""
+
+    assert_app_exists(app)
+
+    deploy_git_app(app, newrev)
+
+    # --- ensure log path exists
+    log_path = join(LOG_ROOT, app)
+    ensure_path(log_path)
+
+    workers = get_workers(app)
+    deployer = deploy_factory(app, workers, deltas)
+
+    settings = spawn_app(app, deltas, deployer)
 
     # TODO: detect other runtimes
     release = workers.pop("release", None)
@@ -369,7 +390,9 @@ def do_deploy(app, deltas={}, newrev=None):
         do_release(release, app_path, settings)
 
 
-def deploy_factory(app, app_path, workers, deltas):
+def deploy_factory(app, workers, deltas):
+    app_path = join(APP_ROOT, app)
+
     if exists(join(app_path, 'requirements.txt')):
         found_app("Python")
         deploy_python(app, deltas)
@@ -379,6 +402,11 @@ def deploy_factory(app, app_path, workers, deltas):
         found_app("Node")
         deploy_node(app, deltas)
         return DEPLOYER_NODE
+
+    if exists(join(app_path, 'pom.xml'))  and check_requirements(['java', 'mvn']):
+        found_app("Java Maven")
+        deploy_java(app, deltas)
+        return DEPLOYER_JAVA_MAVEN
 
     if exists(join(app_path, 'pom.xml'))  and check_requirements(['java', 'mvn']):
         found_app("Java Maven")
@@ -420,6 +448,7 @@ def do_release(release, app_path, settings):
     if retval:
         echo("-----> Exiting due to release command error value: {}".format(retval))
         exit(retval)
+
 
 def deploy_gradle(app, deltas={}):
     """Deploy a Java application using Gradle"""
@@ -831,6 +860,8 @@ def spawn_app(app, deltas={}, deployer=None):
             env['NGINX_SERVER_NAME'] = 'fooo'
             env['NGINX_SOCKET'] = "{BIND_ADDRESS:s}:{PORT:s}".format(**env)
             env['NGINX_SSL'] = '443 ssl'
+            env['ACME_WWW'] = ACME_WWW
+            env['NGINX_ROOT'] = NGINX_ROOT
             env['INTERNAL_NGINX_CUSTOM_CLAUSES'] = ''
             env['INTERNAL_NGINX_BLOCK_GIT'] = ''
             env['INTERNAL_NGINX_PORTMAP'] = ''
