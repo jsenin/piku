@@ -19,7 +19,7 @@ from pwd import getpwuid
 from grp import getgrgid
 from re import sub
 from shutil import copyfile, rmtree, which
-from socket import socket, AF_INET, SOCK_STREAM
+from socket import socket, AF_INET, SOCK_STREAM, getfqdn
 from stat import S_IRUSR, S_IWUSR, S_IXUSR
 from subprocess import call, check_output, Popen, STDOUT
 from sys import argv, stdin, stdout, stderr, version_info, exit
@@ -36,7 +36,6 @@ if 'sbin' not in environ['PATH']:
     environ['PATH'] = "/usr/local/sbin:/usr/sbin:/sbin:" + environ['PATH']
 
 # === Globals - all tweakable settings are here ===
-
 PIKU_ROOT = environ.get('PIKU_ROOT', join(environ['HOME'], '.piku'))
 PIKU_BIN = join(environ['HOME'], 'bin')
 PIKU_SCRIPT = realpath(__file__)
@@ -67,6 +66,22 @@ DEPLOYER_NODE = 'deployer_node'
 if PIKU_BIN not in environ['PATH']:
     environ['PATH'] = PIKU_BIN + ":" + environ['PATH']
 
+
+NGINX_TEMPLATE_STATIC = """
+server {
+  listen 80;
+  listen [::]:80;
+
+  root $DOCUMENT_ROOT;
+
+  index index.html;
+  server_name $NGINX_SERVER_NAME;
+
+  location / {
+  	try_files $uri $uri/ =404;
+  }
+}
+"""
 # pylint: disable=anomalous-backslash-in-string
 NGINX_TEMPLATE = """
 upstream $APP {
@@ -368,6 +383,10 @@ def get_workers(app):
     return workers
 
 
+def get_hostname():
+    return getfqdn()
+
+
 def do_deploy(app, deltas={}, newrev=None):
     """Deploy an app by resetting the work directory"""
 
@@ -650,7 +669,6 @@ def deploy_identity(app, deltas={}):
         makedirs(env_path)
 
 def get_static_mappings(app_path, workers, env):
-    print ("Get static mappings")
     # Get a mapping of /url:path1,/url2:path2
     static_paths = env.get('NGINX_STATIC_PATHS', '')
     # prepend static worker path if present
@@ -858,7 +876,7 @@ def spawn_app(app, deltas={}, deployer=None):
 
     if not 'NGINX_SERVER_NAME' in env:
         if 'static' in workers:
-            env['NGINX_SERVER_NAME'] = 'fooo'
+            env['NGINX_SERVER_NAME'] = '{}.{}'.format(app, get_hostname())
             env['NGINX_SOCKET'] = "{BIND_ADDRESS:s}:{PORT:s}".format(**env)
             env['NGINX_SSL'] = '443 ssl'
             env['ACME_WWW'] = ACME_WWW
@@ -870,7 +888,8 @@ def spawn_app(app, deltas={}, deployer=None):
             env['INTERNAL_NGINX_STATIC_MAPPINGS'] = get_static_mappings(app_path, workers, env)
             # el common incluye los mappings
             env['INTERNAL_NGINX_COMMON'] = expandvars(NGINX_COMMON_FRAGMENT, env)
-            buffer = expandvars(NGINX_TEMPLATE, env)
+            env['DOCUMENT_ROOT'] = app_path
+            buffer = expandvars(NGINX_TEMPLATE_STATIC, env)
 
             nginx_conf = join(NGINX_ROOT, "{}.conf".format(app))
             apply_ngnix_config(nginx_conf, buffer, app, environ)
