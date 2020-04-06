@@ -773,6 +773,7 @@ def spawn_app(app, deltas={}, deployer=None):
                 env[k] = v
 
         # Set up nginx if we have NGINX_SERVER_NAME set
+        env['NGINX_SERVER_NAME'] = env.get('NGINX_SERVER_NAME', '{}.{}'.format(app, get_hostname()))
         if 'NGINX_SERVER_NAME' in env:
             nginx = command_output("nginx -V")
             nginx_ssl = "443 ssl"
