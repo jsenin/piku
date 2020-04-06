@@ -83,9 +83,11 @@ chmod +x /etc/init.d/uwsgi-piku
 
 curl --silent --location https://raw.githubusercontent.com/piku/piku/master/nginx.default.dist --output /etc/nginx/sites-available/default
 /etc/init.d/nginx start
+update-rc.d nginx defaults
 
 curl --silent --location https://raw.githubusercontent.com/piku/piku/master/incron.dist --output /etc/incron.d/piku
 /etc/init.d/incron start
+update-rc.d incron defaults
 
 bb-log-info "Download Piku"
 # bb-download $PIKU_URL  requires wget
