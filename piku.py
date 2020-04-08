@@ -51,15 +51,15 @@ UWSGI_LOG_MAXSIZE = '1048576'
 ACME_ROOT = environ.get('ACME_ROOT', join(environ['HOME'], '.acme.sh'))
 ACME_WWW = abspath(join(PIKU_ROOT, "acme"))
 
-DEPLOYER_NONE = 'deployer_none'
-DEPLOYER_STATIC = 'deployer_static'
-DEPLOYER_GENERIC = 'deployer_generic'
-DEPLOYER_CLOJURE = 'deployer_clojure'
-DEPLOYER_GO = 'deployer_go'
-DEPLOYER_JAVA_GRADLE = 'deployer_java_gradle'
-DEPLOYER_JAVA_MAVEN = 'deployer_java_maven'
-DEPLOYER_PYTHON = 'deployer_python'
-DEPLOYER_NODE = 'deployer_node'
+BUILDPACK_NONE = 'BUILDPACK_none'
+BUILDPACK_STATIC = 'BUILDPACK_static'
+BUILDPACK_GENERIC = 'BUILDPACK_generic'
+BUILDPACK_CLOJURE = 'BUILDPACK_clojure'
+BUILDPACK_GO = 'BUILDPACK_go'
+BUILDPACK_JAVA_GRADLE = 'BUILDPACK_java_gradle'
+BUILDPACK_JAVA_MAVEN = 'BUILDPACK_java_maven'
+BUILDPACK_PYTHON = 'BUILDPACK_python'
+BUILDPACK_NODE = 'BUILDPACK_node'
 
 # === Make sure we can access piku user-installed binaries === #
 
@@ -345,7 +345,7 @@ def found_app(kind):
     return True
 
 
-def deploy_git_app(app, newrev=None):
+def deploy_source(app, newrev=None):
     app_path = join(APP_ROOT, app)
     env = {'GIT_WORK_DIR': app_path}
 
@@ -392,16 +392,16 @@ def do_deploy(app, deltas={}, newrev=None):
 
     assert_app_exists(app)
 
-    deploy_git_app(app, newrev)
+    deploy_source(app, newrev)
 
     # --- ensure log path exists
     log_path = join(LOG_ROOT, app)
     ensure_path(log_path)
 
     workers = get_workers(app)
-    deployer = deploy_factory(app, workers, deltas)
+    buildpack = get_buildpack(app, workers, deltas)
 
-    settings = spawn_app(app, deltas, deployer)
+    settings = spawn_app(app, deltas, buildpack)
 
     # TODO: detect other runtimes
     release = workers.pop("release", None)
@@ -409,56 +409,56 @@ def do_deploy(app, deltas={}, newrev=None):
         do_release(release, app, settings)
 
 
-def deploy_factory(app, workers, deltas):
+def get_buildpack(app, workers, deltas):
     app_path = join(APP_ROOT, app)
 
     if exists(join(app_path, 'requirements.txt')):
         found_app("Python")
         deploy_python(app, deltas)
-        return DEPLOYER_PYTHON
+        return BUILDPACK_PYTHON
 
     if exists(join(app_path, 'package.json')) and check_requirements(['nodejs', 'npm', 'nodeenv']):
         found_app("Node")
         deploy_node(app, deltas)
-        return DEPLOYER_NODE
+        return BUILDPACK_NODE
 
     if exists(join(app_path, 'pom.xml'))  and check_requirements(['java', 'mvn']):
         found_app("Java Maven")
         deploy_java(app, deltas)
-        return DEPLOYER_JAVA_MAVEN
+        return BUILDPACK_JAVA_MAVEN
 
     if exists(join(app_path, 'pom.xml'))  and check_requirements(['java', 'mvn']):
         found_app("Java Maven")
         deploy_java(app, deltas)
-        return DEPLOYER_JAVA_MAVEN
+        return BUILDPACK_JAVA_MAVEN
 
     if exists(join(app_path, 'build.gradle')) and check_requirements(['java', 'gradle']):
         found_app("Java Gradle")
         deploy_gradle(app, deltas)
-        return DEPLOYER_JAVA_GRADLE
+        return BUILDPACK_JAVA_GRADLE
 
     if (exists(join(app_path, 'Godeps')) or len(glob(join(app_path, '*.go')))) and check_requirements(['go']):
         found_app("Go")
         deploy_go(app, deltas)
-        return DEPLOYER_GO
+        return BUILDPACK_GO
 
     if exists(join(app_path, 'project.clj')) and check_requirements(['java', 'lein']):
         found_app("Clojure Lein")
         deploy_clojure(app, deltas)
-        return DEPLOYER_CLOJURE
+        return BUILDPACK_CLOJURE
 
     if 'release' in workers and 'web' in workers:
         echo("-----> Generic app detected.", fg='green')
         deploy_identity(app, deltas)
-        return DEPLOYER_GENERIC
+        return BUILDPACK_GENERIC
 
     if 'static' in workers:
         echo("-----> Static app detected.", fg='green')
         deploy_identity(app, deltas)
-        return DEPLOYER_STATIC
+        return BUILDPACK_STATIC
 
     echo("-----> Could not detect runtime!", fg='red')
-    return DEPLOYER_NONE
+    return BUILDPACK_NONE
 
 
 def do_release(release, app, settings):
@@ -692,7 +692,7 @@ def get_static_mappings(app_path, workers, env):
         return mappings
 
 
-def spawn_app(app, deltas={}, deployer=None):
+def spawn_app(app, deltas={}, buildpack=None):
     """Create all workers for an app"""
 
     def apply_ngnix_config(nginx_conf, settings, app, environ):
@@ -711,9 +711,10 @@ def spawn_app(app, deltas={}, deployer=None):
 
     # pylint: disable=unused-variable
     app_path = join(APP_ROOT, app)
-    procfile = join(app_path, 'Procfile')
-    workers = parse_procfile(procfile)
+    workers = get_workers(app)
+
     workers.pop("release", None)
+
     ordinals = defaultdict(lambda: 1)
     worker_count = {k: 1 for k in workers.keys()}
 
@@ -747,7 +748,7 @@ def spawn_app(app, deltas={}, deployer=None):
 
     # add node path if present
     node_path = join(virtualenv_path, "node_modules")
-    if deployer == DEPLOYER_NODE and exists(node_path):
+    if buildpack == BUILDPACK_NODE and exists(node_path):
         env["NODE_PATH"] = node_path
         env["PATH"] = ':'.join([join(node_path, ".bin"), env['PATH']])
 
@@ -760,7 +761,7 @@ def spawn_app(app, deltas={}, deployer=None):
         env.update(parse_settings(settings, env))  # lgtm [py/modification-of-default-value]
 
     if 'web' in workers or 'wsgi' in workers or 'jwsgi' in workers or 'static' in workers:
-    # if deployer in [DEPLOYER_GENERIC, DEPLOYER_PYTHON, DEPLOYER_STATIC]:
+    # if deployer in [BUILDPACK_GENERIC, BUILDPACK_PYTHON, BUILDPACK_STATIC]:
         # Pick a port if none defined
         if 'PORT' not in env:
             env['PORT'] = str(get_free_port())
