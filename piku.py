@@ -61,6 +61,9 @@ BUILDPACK_JAVA_MAVEN = 'BUILDPACK_java_maven'
 BUILDPACK_PYTHON = 'BUILDPACK_python'
 BUILDPACK_NODE = 'BUILDPACK_node'
 
+class PikuApplicationNotFoundError(Exception):
+    pass
+
 # === Make sure we can access piku user-installed binaries === #
 
 if PIKU_BIN not in environ['PATH']:
@@ -408,6 +411,63 @@ def do_deploy(app, deltas={}, newrev=None):
     if release:
         do_release(release, app, settings)
 
+def apply_ngnix_config(app, content):
+    nginx_conf = join(NGINX_ROOT, "{}.conf".format(app))
+
+    with open(nginx_conf, "w") as h:
+        h.write(content)
+    # prevent broken config from breaking other deploys
+    try:
+        nginx_config_test = str(check_output("nginx -t 2>&1 | grep {}".format(app), env=environ, shell=True))
+    except Exception:
+        nginx_config_test = None
+    if nginx_config_test:
+        echo("Error: [nginx config] {}".format(nginx_config_test), fg='red')
+        echo("Warning: removing broken nginx config.", fg='yellow')
+        unlink(nginx_conf)
+
+def build_ngnix_static_conf(app):
+
+    def expandvars(content, dataset):
+        """Replace a variable in format as  ${var}"""
+
+        def replace_var(match):
+            return dataset.get(match.group(1))
+
+        pattern = r'\$\{([^}]*)\}'
+        return sub(pattern, replace_var, content)
+
+    NGNIX_STATIC_SITE = """
+server {
+  listen 80;
+  listen [::]:80;
+
+  root ${document_root};
+
+  index index.html;
+  server_name ${server_name};
+
+  location / {
+     try_files $uri $uri/ =404;
+  }
+}
+"""
+    document_root = join(APP_ROOT, app)
+    server_name = '{}.{}'.format(app, get_hostname())
+    data = dict(document_root=document_root, server_name=server_name)
+    s = expandvars(NGNIX_STATIC_SITE, data)
+    print(s)
+    return s
+
+def raise_error_if_app_not_found(app):
+    git_path = join(GIT_ROOT, app)
+    if not exists(git_path):
+        raise PikuApplicationNotFoundError(app)
+
+def deploy_app(app):
+    raise_error_if_app_not_found(app)
+    ngnix_conf = build_ngnix_static_conf(app)
+    apply_ngnix_config(app, ngnix_conf)
 
 def get_buildpack(app, workers, deltas):
     app_path = join(APP_ROOT, app)
